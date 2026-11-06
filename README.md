@@ -1,5 +1,5 @@
 # The Iron Tapper
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~>  "minimal console [mp3] music player"
+# ~~~>  "minimal console [mp3] music player"
 # /// [by Legba]
 
 ! WARNING: it is still in development, current state - MVP "v0.1" !
