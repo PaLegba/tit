@@ -12,9 +12,9 @@ LDFLAGS ?=
 LDLIBS += -lm -pthread
 
 SRC = src/main.c src/app.c src/ui.c src/playlist.c src/tags.c \
-      src/player.c src/vorbis.c src/mp4.c src/themes.c src/util.c
-HDR = src/app.h src/player.h src/playlist.h src/tags.h src/themes.h \
-      src/ui.h src/util.h
+      src/player.c src/vorbis.c src/mp4.c src/mod.c src/themes.c src/util.c
+HDR = src/app.h src/player.h src/playlist.h src/tags.h src/mod.h \
+      src/themes.h src/ui.h src/util.h
 
 all: tit
 
@@ -30,9 +30,10 @@ tit: $(SRC) $(HDR) src/haiku_audio.cpp
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(SRC) $$obj $(LDLIBS) $$libs
 
 tests/test: tests/test.c src/tags.c src/playlist.c src/themes.c src/util.c \
-            src/tags.h src/playlist.h src/themes.h src/util.h
+            src/mod.c src/tags.h src/playlist.h src/themes.h src/mod.h \
+            src/util.h
 	$(CC) $(CFLAGS) -Isrc -o $@ tests/test.c src/tags.c src/playlist.c \
-		src/themes.c src/util.c -lm
+		src/mod.c src/themes.c src/util.c -lm
 
 test: tests/test
 	./tests/test

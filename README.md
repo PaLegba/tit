@@ -29,9 +29,9 @@ More screenshots: [screenshots/](screenshots/).
 MVP; Linux, NetBSD, OpenBSD, FreeBSD and Haiku build and pass the tests;
 macOS is expected to build but is untested. It is intentionally small:
 
-* local MP3, WAV, FLAC, Ogg/Vorbis, AAC (ADTS) and M4A/AAC playback;
+* local MP3, WAV, FLAC, Ogg/Vorbis, AAC (ADTS), M4A/AAC and MOD playback;
 * `minimp3_ex` for MP3, miniaudio for WAV/FLAC, `stb_vorbis` for Vorbis,
-  `miniaac` for AAC, `minimp4` for the M4A container;
+  `miniaac` for AAC, `minimp4` for the M4A container, `pocketmod` for MOD;
 * file/directory/playlist arguments;
 * m3u, m3u8 and pls import;
 * ID3v1 and ID3v2.2/2.3/2.4 tags, including UTF-16 and legacy CP1251;
@@ -47,6 +47,7 @@ Not in this MVP:
 
 * Opus, ALAC, WMA and other codecs; AAC is supported in ADTS `.aac` and
   M4A (AAC-LC); video MP4 is not supported;
+* XM, S3M, IT and other tracker formats; MOD is the only module format;
 * URL streaming (URL entries from playlists are displayed but not played yet);
 * CUE sheets and splitting monolithic album files into tracks;
 * saving/exporting playlists;
@@ -88,7 +89,7 @@ The binary is `tit`. `path` may be an audio file, a directory, or an `.m3u`,
 directory is opened. Several audio file arguments become a selection queue.
 
 Audio extensions: `.mp3`, `.wav`, `.flac`, `.ogg`, `.oga`, `.aac` (ADTS),
-`.m4a` (AAC-LC).
+`.m4a` (AAC-LC), `.mod` (ProTracker).
 
 Examples:
 
@@ -145,11 +146,15 @@ Examples:
   system mixer.
 * M4A support is AAC-LC only. ALAC, HE-AAC/SBR and video MP4 are rejected
   with an error. The track is read from the first AAC audio track.
+* MOD playback is `pocketmod` (MIT). Classic 15/31-sample ProTracker MOD
+  only; XM, S3M and IT are not supported. MOD is rendered as 48 kHz stereo.
+  Seeking re-renders the module from the start, so it is approximate.
 * ID3 tags are parsed for MP3 only; FLAC/Vorbis/WAV/M4A tags are not shown.
-  List durations are read from container headers for all formats: RIFF data
-  size, FLAC STREAMINFO, the last Ogg granule, M4A `mvhd`, and ADTS frame
-  count. ADTS is the only format that scans the whole file for this.
-  Opus (`.opus`, or Opus inside `.ogg`) is not supported.
+  List durations come from RIFF data size, FLAC STREAMINFO, the last Ogg
+  granule, M4A `mvhd`, and the ADTS frame count; MOD durations are computed
+  by a low-rate render. ADTS and MOD are the only formats that scan/render
+  the whole file for this. Opus (`.opus`, or Opus inside `.ogg`) is not
+  supported.
 * `--tag-encoding=latin1` is the default per ID3v1/ID3v2.3. Use
   `--tag-encoding=cp1251` for old tags written in CP1251, or
   `--tag-encoding=utf8` for non-standard ID3v1/v2.3 tags written in UTF-8.

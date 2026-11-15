@@ -403,8 +403,12 @@ static void draw_now(App *a, Ui *ui, int w, int y)
     char fmt[64];
     int hz = player_hz(a->player);
     int br = player_bitrate(a->player);
-    snprintf(fmt, sizeof(fmt), "%d Hz/%dch/%dk", hz,
-             player_channels(a->player), br);
+    if (br > 0)
+        snprintf(fmt, sizeof(fmt), "%d Hz/%dch/%dk", hz,
+                 player_channels(a->player), br);
+    else
+        snprintf(fmt, sizeof(fmt), "%d Hz/%dch", hz,
+                 player_channels(a->player));
     int fmtw = display_width(fmt);
     int title_max = w - 4 - fmtw - 1;
     if (title_max < 1) title_max = 1;

@@ -273,6 +273,16 @@ static void test_duration_files(void)
     assert(m.duration_ms == 46);
     meta_free(&m);
 
+    unsigned char mod[2108];
+    memset(mod, 0, sizeof(mod));
+    mod[950] = 1; /* one order entry */
+    memcpy(mod + 1080, "M.K.", 4);
+    snprintf(path, sizeof(path), "%s/tone.mod", dir);
+    write_bytes(path, mod, sizeof(mod));
+    assert(tags_read(path, &m, TAG_LATIN1) == 0);
+    assert(m.duration_ms == 7680);
+    meta_free(&m);
+
     snprintf(path, sizeof(path), "%s/tone.wav", dir);
     unlink(path);
     snprintf(path, sizeof(path), "%s/tone.flac", dir);
@@ -280,6 +290,8 @@ static void test_duration_files(void)
     snprintf(path, sizeof(path), "%s/tone.m4a", dir);
     unlink(path);
     snprintf(path, sizeof(path), "%s/tone.aac", dir);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/tone.mod", dir);
     unlink(path);
     rmdir(dir);
 }
@@ -294,6 +306,8 @@ static void test_names(void)
     assert(is_audio_name("a.aac"));
     assert(is_audio_name("a.m4a"));
     assert(is_audio_name("A.M4A"));
+    assert(is_audio_name("a.mod"));
+    assert(is_audio_name("A.MOD"));
     assert(!is_audio_name("a.opus"));
     assert(!is_audio_name("a.txt"));
     assert(!is_audio_name("mp3"));

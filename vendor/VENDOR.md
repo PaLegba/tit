@@ -12,6 +12,7 @@ library store: the build must work from a fresh clone.
 | `stb_vorbis.c` | v1.22 | https://github.com/nothings/stb | Public domain (license at end of file) |
 | `maac.h` | 1.0.1 (single-file build) | miniaac 1.0.1 | 0BSD (license at top of file) |
 | `minimp4.h` | commit `158a79d8acb8b830fd31beeaa3195aa2269fc04e` | https://github.com/lieff/minimp4 | Public domain / CC0 (license at top of file) |
+| `pocketmod.h` | commit `33ac2ba2f7c57aad0944a359e04bde5b2668470d` | https://github.com/rombankzero/pocketmod | MIT (license at end of header) |
 
 `minimp3` is used as the MP3 decoder. `miniaudio` provides the audio device,
 mixing, resampling and software volume, and decodes WAV and FLAC. Vorbis is
@@ -21,3 +22,5 @@ lives in `src/vorbis.c` because its static helpers collide with minimp3's).
 decoder; the data source wrapper in `src/player.c` feeds `minimp3_ex` output
 into `ma_sound`. `minimp4.h` demuxes AAC inside M4A; `src/mp4.c` holds its
 implementation (its helper names are too generic to share player.c).
+`pocketmod.h` renders classic 15/31-sample ProTracker MOD files; its
+implementation and the duration probe live in `src/mod.c`.

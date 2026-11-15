@@ -29,7 +29,7 @@ static void usage(FILE *f)
         "usage: tit [options] [path ...]\n"
         "\n"
         "  path may be an audio file, a directory, or an .m3u/.m3u8/.pls playlist.\n"
-        "  Audio formats: mp3, wav, flac, ogg/vorbis, aac (ADTS), m4a (AAC-LC).\n"
+        "  Audio formats: mp3, wav, flac, ogg/vorbis, aac (ADTS), m4a (AAC-LC), mod.\n"
         "  With no path, the current directory is opened.\n"
         "\n"
         "  -n, --no-audio              use the null audio backend\n"

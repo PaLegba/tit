@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "mod.h"
 #include "util.h"
 
 #define MP3_SCAN_MAX (128u * 1024u)
@@ -723,6 +724,10 @@ static void read_duration(int fd, const char *path, uint64_t file_size,
         m4a_duration(fd, file_size, m);
     else if (ext_is(path, ".aac"))
         adts_duration(fd, file_size, m);
+    else if (ext_is(path, ".mod")) {
+        int ms = mod_duration_ms(path);
+        if (ms > 0) set_duration_ms(m, (uint64_t)ms);
+    }
 }
 
 int tags_read(const char *path, TrackMeta *m, TagEncoding enc)

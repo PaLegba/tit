@@ -151,7 +151,7 @@ bool is_audio_name(const char *name)
     return is_mp3_name(name) || (name && (ends_with_ci(name, ".wav") ||
            ends_with_ci(name, ".flac") || ends_with_ci(name, ".ogg") ||
            ends_with_ci(name, ".oga") || ends_with_ci(name, ".aac") ||
-           ends_with_ci(name, ".m4a")));
+           ends_with_ci(name, ".m4a") || ends_with_ci(name, ".mod")));
 }
 
 bool is_playlist_name(const char *name)

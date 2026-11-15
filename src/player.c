@@ -1,9 +1,12 @@
 #include "player.h"
 
+#include "mod.h"
+#include "pocketmod.h"
 #include "util.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdatomic.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -38,11 +41,14 @@
 ma_result tit_haiku_backend_init(ma_backend_callbacks *callbacks);
 #endif
 
+#define MOD_RATE 48000
+
 typedef enum {
     SRC_NONE = 0,
     SRC_MP3,
     SRC_DECODER, /* miniaudio: wav, flac, ogg/vorbis */
-    SRC_AAC      /* miniaac: ADTS */
+    SRC_AAC,     /* miniaac: ADTS */
+    SRC_MOD      /* pocketmod: ProTracker MOD */
 } SourceKind;
 
 struct Player {
@@ -58,6 +64,10 @@ struct Player {
 
     mp3dec_ex_t dec;
     bool dec_open;
+
+    pocketmod_context mod;
+    bool mod_open;
+    bool mod_ended;
 
     ma_decoder decoder;
 
@@ -238,6 +248,63 @@ static ma_result aac_read(Player *p, void *out, ma_uint64 frames,
     return done ? MA_SUCCESS : MA_AT_END;
 }
 
+/* ---- MOD --------------------------------------------------------------- */
+
+static ma_result mod_read(Player *p, void *out, ma_uint64 frames,
+                          ma_uint64 *read)
+{
+    if (!p->mod_open || p->mod_ended) return MA_AT_END;
+
+    float *dst = out;
+    ma_uint64 done = 0;
+    while (done < frames) {
+        ma_uint64 want = frames - done;
+        if (want > 4096) want = 4096;
+        int got = pocketmod_render(&p->mod, dst + done * 2,
+                                   (int)(want * 2 * sizeof(float)));
+        int n = got / (int)(sizeof(float) * 2);
+        if (n <= 0) break;
+        done += (ma_uint64)n;
+        if (pocketmod_loop_count(&p->mod) > 0) {
+            p->mod_ended = true;
+            break;
+        }
+    }
+    *read = done;
+    if (!done) return MA_AT_END;
+    atomic_store(&p->cursor_frames,
+                 atomic_load(&p->cursor_frames) + done);
+    return MA_SUCCESS;
+}
+
+static ma_result mod_seek(Player *p, ma_uint64 frame)
+{
+    if (!p->mod_open) return MA_INVALID_OPERATION;
+    if (p->total_frames && frame >= p->total_frames)
+        frame = p->total_frames - 1;
+    if (!pocketmod_init(&p->mod, p->map, (int)p->map_size, MOD_RATE))
+        return MA_ERROR;
+    p->mod_ended = false;
+
+    /* Pocketmod has no seek; replay into a scratch buffer. */
+    float buf[2048 * 2];
+    uint64_t left = frame;
+    while (left) {
+        uint32_t n = left > 2048 ? 2048 : (uint32_t)left;
+        int got = pocketmod_render(&p->mod, buf,
+                                   (int)(n * 2 * sizeof(float)));
+        int rendered = got / (int)(sizeof(float) * 2);
+        if (rendered <= 0) break;
+        left -= (uint64_t)rendered;
+        if (pocketmod_loop_count(&p->mod) > 0) {
+            p->mod_ended = true;
+            break;
+        }
+    }
+    atomic_store(&p->cursor_frames, frame - left);
+    return MA_SUCCESS;
+}
+
 /* ---- data source ------------------------------------------------------- */
 
 static ma_result ds_read(ma_data_source *ds, void *out, ma_uint64 frames,
@@ -271,6 +338,8 @@ static ma_result ds_read(ma_data_source *ds, void *out, ma_uint64 frames,
     }
     case SRC_AAC:
         return aac_read(p, out, frames, read);
+    case SRC_MOD:
+        return mod_read(p, out, frames, read);
     default:
         return MA_AT_END;
     }
@@ -307,6 +376,8 @@ static ma_result ds_seek(ma_data_source *ds, ma_uint64 frame)
         atomic_store(&p->cursor_frames, frame);
         return MA_SUCCESS;
     }
+    case SRC_MOD:
+        return mod_seek(p, frame);
     default:
         return MA_INVALID_OPERATION;
     }
@@ -449,6 +520,9 @@ static void close_track(Player *p)
     p->aac_pos = 0;
     p->aac_samples = 0;
     p->aac_have = false;
+    p->mod_open = false;
+    p->mod_ended = false;
+    memset(&p->mod, 0, sizeof(p->mod));
     if (p->map) {
         munmap(p->map, p->map_size);
         p->map = NULL;
@@ -739,6 +813,51 @@ static int open_m4a(Player *p, const char *path, char *err, size_t errsize)
     return start_sound(p, err, errsize);
 }
 
+static int open_mod(Player *p, const char *path, char *err, size_t errsize)
+{
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        set_err(err, errsize, "cannot open %s: %s", path, strerror(errno));
+        return -1;
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 600) {
+        close(fd);
+        set_err(err, errsize, "not a regular MOD file: %s", path);
+        return -1;
+    }
+    if (st.st_size > INT_MAX) {
+        close(fd);
+        set_err(err, errsize, "MOD file is too large: %s", path);
+        return -1;
+    }
+    size_t size = (size_t)st.st_size;
+    void *map = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (map == MAP_FAILED) {
+        set_err(err, errsize, "cannot map %s: %s", path, strerror(errno));
+        return -1;
+    }
+
+    p->map = map;
+    p->map_size = size;
+    p->src = SRC_MOD;
+    p->channels = 2;
+    p->hz = MOD_RATE;
+    if (!pocketmod_init(&p->mod, map, (int)size, MOD_RATE)) {
+        set_err(err, errsize,
+                "cannot decode %s: unsupported or corrupt MOD", path);
+        close_track(p);
+        return -1;
+    }
+    p->mod_open = true;
+    p->total_frames = mod_duration_frames(map, size, MOD_RATE);
+    p->bitrate = 0;
+    atomic_store(&p->cursor_frames, 0);
+    atomic_store(&p->ended, false);
+    return start_sound(p, err, errsize);
+}
+
 int player_open(Player *p, const char *path, char *err, size_t errsize)
 {
     close_track(p);
@@ -746,6 +865,7 @@ int player_open(Player *p, const char *path, char *err, size_t errsize)
     if (is_mp3_name(path)) return open_mp3(p, path, err, errsize);
     if (ext_is(path, ".m4a")) return open_m4a(p, path, err, errsize);
     if (ext_is(path, ".aac")) return open_aac(p, path, err, errsize);
+    if (ext_is(path, ".mod")) return open_mod(p, path, err, errsize);
     if (ext_is(path, ".wav") || ext_is(path, ".flac") ||
         ext_is(path, ".ogg") || ext_is(path, ".oga"))
         return open_decoder(p, path, err, errsize);
