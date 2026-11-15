@@ -20,6 +20,10 @@ is the playlist: start in a directory, walk into subdirectories, select a track.
 There is no library database, no scanning daemon, no collection and no network
 requirement.
 
+![The Iron Tapper playing a queue](screenshots/2026-11-15-065805_639x404_scrot.png)
+
+More screenshots: [screenshots/](screenshots/).
+
 ## Status
 
 MVP; Linux, NetBSD, OpenBSD, FreeBSD and Haiku build and pass the tests;
