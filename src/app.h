@@ -40,6 +40,8 @@ typedef struct {
     size_t top;
     int playing_row;
     float last_volume;
+    void (*busy)(void *user, const char *msg);
+    void *busy_user;
     char status[256];
     uint64_t status_until;
     bool quit;

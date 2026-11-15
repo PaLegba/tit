@@ -90,7 +90,7 @@ int view_load_dir(View *v, const char *path, TagEncoding enc)
             if (S_ISDIR(st.st_mode)) {
                 view_add(v, full, de->d_name, ENT_DIR, enc);
             } else if (S_ISREG(st.st_mode)) {
-                if (is_mp3_name(de->d_name))
+                if (is_audio_name(de->d_name))
                     view_add(v, full, de->d_name, ENT_FILE, enc);
                 else if (is_playlist_name(de->d_name))
                     view_add(v, full, de->d_name, ENT_PLAYLIST, enc);
@@ -120,7 +120,7 @@ static void resolve_entry(View *v, const char *base, const char *line,
         view_add(v, path, path_basename(path), ENT_DIR, enc);
     } else if (is_playlist_name(path)) {
         if (exists) view_add(v, path, path_basename(path), ENT_PLAYLIST, enc);
-    } else if (is_mp3_name(path)) {
+    } else if (is_audio_name(path)) {
         Entry *e = view_add(v, path, path_basename(path), ENT_FILE, enc);
         e->missing = !exists || !S_ISREG(st.st_mode);
         if (e->meta.duration_ms == 0 && ext_ms > 0) e->meta.duration_ms = ext_ms;
@@ -222,7 +222,8 @@ int view_load_files(View *v, char *const *paths, size_t n, TagEncoding enc)
             continue;
         }
         struct stat st;
-        if (stat(paths[i], &st) != 0 || !S_ISREG(st.st_mode))
+        if (stat(paths[i], &st) != 0 || !S_ISREG(st.st_mode) ||
+            !is_audio_name(paths[i]))
             continue;
         char *abs = path_absolute(paths[i]);
         view_add(v, abs, path_basename(abs), ENT_FILE, enc);

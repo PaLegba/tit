@@ -154,7 +154,7 @@ static void play_row(App *a, size_t row)
         return;
     }
     if (!view_entry_playable(e)) {
-        set_status(a, "not an MP3 file");
+        set_status(a, "not an audio file");
         return;
     }
     queue_build(a, row, a->shuffle);
@@ -168,6 +168,8 @@ static void play_row(App *a, size_t row)
 
 static void open_dir(App *a, const char *path)
 {
+    if (a->busy)
+        a->busy(a->busy_user, "Reading content... Please wait.");
     if (view_load_dir(&a->view, path, a->tag_enc) != 0) {
         set_status(a, "cannot open directory: %s", path);
         return;
@@ -183,6 +185,8 @@ static void open_dir(App *a, const char *path)
 
 static void open_playlist(App *a, const char *path, bool autoplay)
 {
+    if (a->busy)
+        a->busy(a->busy_user, "Reading content... Please wait.");
     if (view_load_playlist(&a->view, path, a->tag_enc) != 0) {
         set_status(a, "cannot open playlist: %s", path);
         return;
@@ -257,9 +261,11 @@ void app_open_path(App *a, const char *path, bool autoplay)
         open_playlist(a, path, autoplay);
         return;
     }
-    if (is_mp3_name(path)) {
+    if (is_audio_name(path)) {
         char *abs = path_absolute(path);
         char *dir = path_dirname(abs);
+        if (a->busy)
+            a->busy(a->busy_user, "Reading content... Please wait.");
         if (view_load_dir(&a->view, dir, a->tag_enc) != 0) {
             set_status(a, "cannot open directory: %s", dir);
         } else {
@@ -274,11 +280,13 @@ void app_open_path(App *a, const char *path, bool autoplay)
         free(abs);
         return;
     }
-    set_status(a, "only .mp3 files are supported");
+    set_status(a, "unsupported file type: %s", path_basename(path));
 }
 
 void app_open_files(App *a, char *const *paths, size_t n)
 {
+    if (a->busy)
+        a->busy(a->busy_user, "Reading content... Please wait.");
     if (view_load_files(&a->view, paths, n, a->tag_enc) != 0) {
         set_status(a, "no playable files in arguments");
         return;
@@ -322,15 +330,18 @@ void app_back(App *a)
 {
     if (a->view.is_selection) {
         open_dir(a, ".");
-    } else if (a->view.is_playlist) {
-        char *dir = path_dirname(a->view.source ? a->view.source : ".");
-        open_dir(a, dir);
-        free(dir);
-    } else {
-        char *parent = path_parent(a->view.source ? a->view.source : ".");
-        open_dir(a, parent);
-        free(parent);
+        return;
     }
+    char *target = xstrdup(a->view.source ? a->view.source : ".");
+    char *dir = a->view.is_playlist ? path_dirname(target) : path_parent(target);
+    open_dir(a, dir);
+    /* Keep the cursor on the directory (or playlist) we just left. */
+    if (a->view.source && strcmp(a->view.source, dir) == 0) {
+        int row = view_find_path(&a->view, target);
+        if (row >= 0) a->cursor = (size_t)row;
+    }
+    free(dir);
+    free(target);
 }
 
 void app_reload(App *a)

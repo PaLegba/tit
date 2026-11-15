@@ -1,10 +1,6 @@
 # The Iron Tapper
-# ~~~>  "minimal console [mp3] music player"
-# /// [by Legba]
 
-! WARNING: it is still in development, current state - MVP "v0.1" !
-
-## Principles
+"music player doing left"
 
 * omnia mea mecum porto - I carry everything mine with me.
 * 画蛇添足 - don't draw legs on a snake
@@ -15,20 +11,23 @@
 * playlist control: shuffle, ordered by Artist, Track name, Number, Album, reversed play
 * `playmp3list-0.99a` ideas and interface layout inspirations, but fresh and modern-looking
 * most system code is inherited from single-header and statically linked libraries
-* multiplatform: Linux (made), NetBSD (almost), OpenBSD (near), FreeBSD (on the horizon), Haiku (far)
+* multiplatform: Linux (main goal), NetBSD, OpenBSD, FreeBSD, Haiku
 * Build system: suckless Makefile/config.mk one set for all systems
 * Static build when it possible
 
-The Iron Tapper is a small local MP3 player for the terminal. The filesystem
-is the playlist: start in a directory, walk into subdirectories, select an MP3.
+The Iron Tapper is a small local audio player for the terminal. The filesystem
+is the playlist: start in a directory, walk into subdirectories, select a track.
 There is no library database, no scanning daemon, no collection and no network
 requirement.
 
 ## Status
 
-MVP; Linux and NetBSD are tested. It is intentionally small:
+MVP; Linux, NetBSD, OpenBSD, FreeBSD and Haiku build and pass the tests;
+macOS is expected to build but is untested. It is intentionally small:
 
-* local MP3 playback with `minimp3_ex` and `miniaudio`;
+* local MP3, WAV, FLAC, Ogg/Vorbis, AAC (ADTS) and M4A/AAC playback;
+* `minimp3_ex` for MP3, miniaudio for WAV/FLAC, `stb_vorbis` for Vorbis,
+  `miniaac` for AAC, `minimp4` for the M4A container;
 * file/directory/playlist arguments;
 * m3u, m3u8 and pls import;
 * ID3v1 and ID3v2.2/2.3/2.4 tags, including UTF-16 and legacy CP1251;
@@ -42,37 +41,50 @@ MVP; Linux and NetBSD are tested. It is intentionally small:
 
 Not in this MVP:
 
-* anything except MP3;
+* Opus, ALAC, WMA and other codecs; AAC is supported in ADTS `.aac` and
+  M4A (AAC-LC); video MP4 is not supported;
 * URL streaming (URL entries from playlists are displayed but not played yet);
+* CUE sheets and splitting monolithic album files into tracks;
 * saving/exporting playlists;
 * cover art, visualizer, library database, mouse, plugins, MPRIS;
 * runtime key bindings (keys are fixed for now);
-* OpenBSD/FreeBSD/Haiku packaging and fully static builds.
+* fully static builds;
+* Haiku audio uses a small Media Kit (`BSoundPlayer`) backend and falls
+  back to the null device when the Media Kit has no audio output, e.g. in a
+  VM without a sound device. It is built but not verified on real Haiku
+  audio hardware here.
 
 ## Build
 
 Requirements: a C11 compiler, `make`, and the usual POSIX headers. No ncurses,
 no libmpg123, no libasound development package: `miniaudio` loads the audio
-backend at runtime.
+backend at runtime. This includes macOS: use the system `make` (GNU make
+3.81) and clang from the Xcode command line tools; CoreAudio is loaded at
+runtime, so no `-framework` flags are needed.
 
 ```sh
 make
 ./tit [path ...]
 ```
 
-`config.mk` holds `PREFIX`, `CC` and `OPT` (`-O2 -g` by default). For a
-release build: `make clean && make OPT='-O2'`.
+`config.mk` holds an optional `PREFIX`, `CC` and `OPT` (`-O2 -g` by
+default). With an empty `PREFIX`, `make install` uses `/usr/local`, or
+`$HOME/config/non-packaged` on Haiku; override it with `make PREFIX=...`.
+For a release build: `make clean && make OPT='-O2'`.
 
 Install:
 
 ```sh
-make install          # PREFIX=/usr/local by default
+make install          # /usr/local, or ~/config/non-packaged on Haiku
 make install PREFIX=$HOME/.local
 ```
 
-The binary is `tit`. `path` may be an MP3 file, a directory, or an `.m3u`,
+The binary is `tit`. `path` may be an audio file, a directory, or an `.m3u`,
 `.m3u8`, `.pls`, `.lst` or `.list` playlist. With no path, the current
-directory is opened. Several MP3 file arguments become a selection queue.
+directory is opened. Several audio file arguments become a selection queue.
+
+Audio extensions: `.mp3`, `.wav`, `.flac`, `.ogg`, `.oga`, `.aac` (ADTS),
+`.m4a` (AAC-LC).
 
 Examples:
 
@@ -81,12 +93,14 @@ Examples:
 ./tit ~/Music                 # browse a directory
 ./tit album.m3u8              # load a playlist and play its first track
 ./tit song.mp3 more.mp3       # play these files, then next/prev through them
+./tit track.flac set.ogg      # formats can be mixed in one queue
 ./tit --no-audio ~/Music      # no sound device needed (UI testing)
 ./tit --tag-encoding=cp1251 ~/Music   # old Russian tags
 ./tit --tag-encoding=utf8 ~/Music     # UTF-8 ID3v1/v2.3 tags
 ./tit --theme=gruvbox ~/Music         # static color theme
 ./tit --theme=list                    # list themes
 ./tit --frame ~/Music                 # frame around the list
+./tit -a ~/Music                      # ASCII line drawing (--stickchars)
 ```
 
 `NO_COLOR=1` disables colors. The UI uses 256-color mode when available.
@@ -119,9 +133,19 @@ Examples:
 
 ## Notes
 
-* MP3 decoding is `minimp3_ex` (CC0). Output, resampling and software volume
-  are `miniaudio` (public domain / MIT-0). Playback does not touch the system
-  mixer.
+* MP3 decoding is `minimp3_ex` (CC0); WAV and FLAC are decoded by `miniaudio`
+  (public domain / MIT-0), Vorbis by `stb_vorbis` (public domain), ADTS AAC by
+  `miniaac` (0BSD). M4A is demuxed by `minimp4` (public domain / CC0) and its
+  AAC samples go through the same `miniaac` decoder (`maac_raw`). Output,
+  resampling and software volume are `miniaudio`. Playback does not touch the
+  system mixer.
+* M4A support is AAC-LC only. ALAC, HE-AAC/SBR and video MP4 are rejected
+  with an error. The track is read from the first AAC audio track.
+* ID3 tags are parsed for MP3 only; FLAC/Vorbis/WAV/M4A tags are not shown.
+  List durations are read from container headers for all formats: RIFF data
+  size, FLAC STREAMINFO, the last Ogg granule, M4A `mvhd`, and ADTS frame
+  count. ADTS is the only format that scans the whole file for this.
+  Opus (`.opus`, or Opus inside `.ogg`) is not supported.
 * `--tag-encoding=latin1` is the default per ID3v1/ID3v2.3. Use
   `--tag-encoding=cp1251` for old tags written in CP1251, or
   `--tag-encoding=utf8` for non-standard ID3v1/v2.3 tags written in UTF-8.
@@ -129,8 +153,11 @@ Examples:
   current playback queue; selecting a track in the new directory makes that
   directory the new queue.
 * Every directory view starts with `../`, so the parent directory is always
-  visible and selectable. `b` / Backspace do the same thing.
-* The header shows the number of playable MP3 tracks, not every row. The
+  visible and selectable. `b` / Backspace go to the parent and keep the
+  cursor on the directory (or playlist) you just left.
+* Reading a directory or playlist shows `Reading content... Please wait.`
+  while it scans tags and durations.
+* The header shows the number of playable tracks, not every row. The
   status line after loading also shows the total number of entries
   (directories, playlists and the `../` row included).
 * `f` toggles a single-line frame around the playlist/file browser; `--frame`
@@ -146,11 +173,21 @@ Examples:
   `cyberpunk`, `ork`, `ledg`, `ledb`, `ledr`, `ledw`, `ledy`, `leda`, `ledc`,
   `ledmg`, plus `Legba` from the old `playmp3listrc`. Truecolor is used when
   `COLORTERM` advertises it; otherwise colors are mapped to the 256-color
-  palette. `TIT_TRUECOLOR=1` forces 24-bit color,
-  `TIT_TRUECOLOR=0` forces 256-color mode.
-* Linux and NetBSD are the tested targets. OpenBSD, FreeBSD and Haiku are
-  planned in that order; static builds are a separate milestone. NetBSD
-  build and audio notes are in `netbsd.md`.
+  palette. On `vt100`/`vt220`/`vt320`/`wsvt25`/`cons25`/`linux`/`ansi`
+  consoles only the 16 ANSI colors are used: those terminals parse `38;5;N`
+  as SGR 5 (blink). `TIT_TRUECOLOR=1` forces 24-bit color,
+  `TIT_TRUECOLOR=0` forces 256-color mode (and can blink on such consoles).
+* Linux, NetBSD, OpenBSD, FreeBSD and Haiku are tested targets (the 2026-11
+  codec iteration builds and decodes the same files on all five). macOS is
+  expected to build with the same Makefile and uses CoreAudio through
+  `miniaudio`, but is not tested here. Audio output uses ALSA on Linux,
+  `audio(4)` on NetBSD, sndio/`audio(4)` on OpenBSD, OSS on FreeBSD. Haiku
+  uses a Media Kit `BSoundPlayer` backend and falls back to null when no
+  output node exists. Static builds are a separate milestone. NetBSD build
+  and audio notes are maintained separately.
+* FreeBSD base ships termcap, not terminfo, while termbox2 reads terminfo.
+  `TERM=xterm` works over ssh; on the native console install a terminfo
+  entry or use an xterm-compatible `TERM`.
 
 ## Vendored
 

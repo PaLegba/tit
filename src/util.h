@@ -21,6 +21,7 @@ char *path_parent(const char *path);
 
 bool is_url(const char *s);
 bool is_mp3_name(const char *name);
+bool is_audio_name(const char *name);
 bool is_playlist_name(const char *name);
 
 size_t utf8_next(const char *s, uint32_t *cp);

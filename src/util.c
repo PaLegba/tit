@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -143,6 +144,14 @@ static bool ends_with_ci(const char *s, const char *suffix)
 bool is_mp3_name(const char *name)
 {
     return name && ends_with_ci(name, ".mp3");
+}
+
+bool is_audio_name(const char *name)
+{
+    return is_mp3_name(name) || (name && (ends_with_ci(name, ".wav") ||
+           ends_with_ci(name, ".flac") || ends_with_ci(name, ".ogg") ||
+           ends_with_ci(name, ".oga") || ends_with_ci(name, ".aac") ||
+           ends_with_ci(name, ".m4a")));
 }
 
 bool is_playlist_name(const char *name)

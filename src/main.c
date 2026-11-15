@@ -28,13 +28,15 @@ static void usage(FILE *f)
     fputs(
         "usage: tit [options] [path ...]\n"
         "\n"
-        "  path may be an MP3 file, a directory, or an .m3u/.m3u8/.pls playlist.\n"
+        "  path may be an audio file, a directory, or an .m3u/.m3u8/.pls playlist.\n"
+        "  Audio formats: mp3, wav, flac, ogg/vorbis, aac (ADTS), m4a (AAC-LC).\n"
         "  With no path, the current directory is opened.\n"
         "\n"
         "  -n, --no-audio              use the null audio backend\n"
         "      --tag-encoding=ENC      latin1 (default), cp1251 or utf8\n"
         "      --theme=NAME            color theme (see --theme=list)\n"
         "      --frame                 draw a frame around the list\n"
+        "  -a, --ascii                 use ASCII line drawing (no box glyphs)\n"
         "  -h, --help                  show this help\n"
         "  -v, --version               show version\n",
         f);
@@ -45,6 +47,7 @@ int main(int argc, char **argv)
     TagEncoding enc = TAG_LATIN1;
     bool null_audio = false;
     bool frame = false;
+    bool ascii = false;
     const char *theme_name = NULL;
     const char *paths[256];
     size_t npaths = 0;
@@ -61,6 +64,9 @@ int main(int argc, char **argv)
             null_audio = true;
         } else if (strcmp(arg, "--frame") == 0) {
             frame = true;
+        } else if (strcmp(arg, "-a") == 0 || strcmp(arg, "--ascii") == 0 ||
+                   strcmp(arg, "--stickchars") == 0) {
+            ascii = true;
         } else if (strcmp(arg, "--tag-encoding=cp1251") == 0) {
             enc = TAG_CP1251;
         } else if (strcmp(arg, "--tag-encoding=latin1") == 0) {
@@ -109,6 +115,9 @@ int main(int argc, char **argv)
         return 1;
     }
     ui.frame = frame;
+    ui.ascii = ascii;
+    app.busy = ui_busy;
+    app.busy_user = &ui;
 
     if (npaths == 0) {
         app_open_dir(&app, ".");
@@ -119,7 +128,7 @@ int main(int argc, char **argv)
         for (size_t i = 0; i < npaths; i++) {
             struct stat st;
             if (stat(paths[i], &st) != 0 || !S_ISREG(st.st_mode) ||
-                !is_mp3_name(paths[i])) {
+                !is_audio_name(paths[i])) {
                 all_files = false;
                 break;
             }

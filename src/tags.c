@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -196,6 +197,33 @@ static uint32_t be32(const unsigned char *p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
            ((uint32_t)p[2] << 8) | p[3];
+}
+
+static uint64_t be64(const unsigned char *p)
+{
+    return ((uint64_t)be32(p) << 32) | be32(p + 4);
+}
+
+static uint32_t le32(const unsigned char *p)
+{
+    return ((uint32_t)p[3] << 24) | ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[1] << 8) | p[0];
+}
+
+static uint64_t le64(const unsigned char *p)
+{
+    return ((uint64_t)le32(p + 4) << 32) | le32(p);
+}
+
+static void set_duration_ms(TrackMeta *m, uint64_t ms)
+{
+    m->duration_ms = ms > 0x7fffffffu ? 0x7fffffff : (int)ms;
+}
+
+static bool ext_is(const char *path, const char *ext)
+{
+    size_t np = strlen(path), ne = strlen(ext);
+    return np >= ne && strcasecmp(path + np - ne, ext) == 0;
 }
 
 static uint32_t syncsafe32(const unsigned char *p)
@@ -502,9 +530,213 @@ static int read_at(int fd, off_t off, void *buf, size_t n)
     return (int)done;
 }
 
+/* Durations come from container headers, not from decoding the whole file. */
+
+static void wav_duration(int fd, uint64_t file_size, TrackMeta *m)
+{
+    unsigned char h[12];
+    if (read_at(fd, 0, h, 12) != 12 ||
+        (memcmp(h, "RIFF", 4) != 0 && memcmp(h, "RF64", 4) != 0) ||
+        memcmp(h + 8, "WAVE", 4) != 0)
+        return;
+
+    uint64_t pos = 12;
+    uint32_t byte_rate = 0;
+    bool have_data = false;
+    uint64_t data_size = 0;
+    while (pos + 8 <= file_size) {
+        unsigned char ch[8];
+        if (read_at(fd, (off_t)pos, ch, 8) != 8) break;
+        uint32_t size = le32(ch + 4);
+        if (memcmp(ch, "fmt ", 4) == 0) {
+            unsigned char fmt[16];
+            if (size >= 16 && read_at(fd, (off_t)pos + 8, fmt, 16) == 16)
+                byte_rate = le32(fmt + 8);
+        } else if (memcmp(ch, "data", 4) == 0) {
+            uint64_t off = pos + 8;
+            data_size = size;
+            if (size == 0 || size == 0xffffffffu ||
+                data_size > file_size - off)
+                data_size = file_size > off ? file_size - off : 0;
+            have_data = true;
+            if (byte_rate) break;
+        }
+        pos += 8 + (uint64_t)size + (size & 1u);
+    }
+    if (have_data && byte_rate && data_size)
+        set_duration_ms(m, data_size * 1000 / byte_rate);
+}
+
+static void flac_duration(int fd, TrackMeta *m)
+{
+    unsigned char h[8], si[34];
+    if (read_at(fd, 0, h, 4) != 4 || memcmp(h, "fLaC", 4) != 0) return;
+    if (read_at(fd, 4, h, 4) != 4) return;
+    unsigned type = h[0] & 0x7f;
+    unsigned len = ((unsigned)h[1] << 16) | ((unsigned)h[2] << 8) | h[3];
+    if (type != 0 || len < 34 || read_at(fd, 8, si, 34) != 34) return;
+
+    uint32_t rate = ((uint32_t)si[10] << 12) | ((uint32_t)si[11] << 4) |
+                    (si[12] >> 4);
+    uint64_t samples = ((uint64_t)(si[13] & 0x0f) << 32) |
+                       ((uint64_t)si[14] << 24) | ((uint64_t)si[15] << 16) |
+                       ((uint64_t)si[16] << 8) | si[17];
+    if (rate && samples) set_duration_ms(m, samples * 1000 / rate);
+}
+
+static void ogg_duration(int fd, uint64_t file_size, TrackMeta *m)
+{
+    unsigned char page[4096];
+    int n = read_at(fd, 0, page, sizeof(page));
+    if (n < 28 || memcmp(page, "OggS", 4) != 0) return;
+
+    size_t packet = 27 + page[26];
+    if (packet + 16 > (size_t)n || page[packet] != 1 ||
+        memcmp(page + packet + 1, "vorbis", 6) != 0)
+        return;
+    uint32_t rate = le32(page + packet + 12);
+    if (!rate) return;
+
+    size_t tail = file_size < 65536 ? (size_t)file_size : 65536;
+    unsigned char *buf = xmalloc(tail);
+    int got = read_at(fd, (off_t)(file_size - tail), buf, tail);
+    uint64_t granule = 0;
+    size_t i = (size_t)got;
+    while (i >= 14) {
+        i--;
+        if (memcmp(buf + i, "OggS", 4) == 0) {
+            granule = le64(buf + i + 6);
+            break;
+        }
+    }
+    free(buf);
+    if (granule && granule != UINT64_MAX)
+        set_duration_ms(m, granule * 1000 / rate);
+}
+
+static void m4a_duration(int fd, uint64_t file_size, TrackMeta *m)
+{
+    uint64_t pos = 0;
+    while (pos + 8 <= file_size) {
+        unsigned char h[16];
+        if (read_at(fd, (off_t)pos, h, 8) != 8) break;
+        uint64_t size = be32(h);
+        unsigned hdr = 8;
+        if (size == 1) {
+            if (read_at(fd, (off_t)pos + 8, h + 8, 8) != 8) break;
+            size = be64(h + 8);
+            hdr = 16;
+        } else if (size == 0) {
+            size = file_size - pos;
+        }
+        if (size < hdr || size > file_size - pos) break;
+
+        if (memcmp(h + 4, "moov", 4) == 0) {
+            size_t want = (size_t)(size - hdr);
+            if (want > 65536) want = 65536;
+            unsigned char *buf = xmalloc(want);
+            if (read_at(fd, (off_t)(pos + hdr), buf, want) == (int)want) {
+                for (size_t i = 4; i + 8 <= want; i++) {
+                    if (memcmp(buf + i, "mvhd", 4) != 0) continue;
+                    size_t payload = i + 4;
+                    unsigned version = buf[payload];
+                    uint32_t timescale = 0;
+                    uint64_t duration = 0;
+                    if (version == 1 && payload + 32 <= want) {
+                        timescale = be32(buf + payload + 20);
+                        duration = be64(buf + payload + 24);
+                    } else if (version == 0 && payload + 20 <= want) {
+                        timescale = be32(buf + payload + 12);
+                        duration = be32(buf + payload + 16);
+                    }
+                    if (timescale && duration)
+                        set_duration_ms(m, duration * 1000 / timescale);
+                    break;
+                }
+            }
+            free(buf);
+            break;
+        }
+        pos += size;
+    }
+}
+
+static const int aac_rates[13] = {
+    96000, 88200, 64000, 48000, 44100, 32000, 24000,
+    22050, 16000, 12000, 11025, 8000, 7350,
+};
+
+static bool adts_header(const unsigned char *b, size_t len, unsigned *flen,
+                        int *hz)
+{
+    if (len < 7 || b[0] != 0xff || (b[1] & 0xf6) != 0xf0) return false;
+    unsigned length = ((unsigned)(b[3] & 0x03) << 11) |
+                      ((unsigned)b[4] << 3) | ((unsigned)b[5] >> 5);
+    unsigned rate = (b[2] >> 2) & 0x0f;
+    if (length < 7 || rate > 12) return false;
+    *flen = length;
+    *hz = aac_rates[rate];
+    return true;
+}
+
+static void adts_duration(int fd, uint64_t file_size, TrackMeta *m)
+{
+    unsigned char first[7], buf[65536];
+    unsigned flen;
+    int hz;
+    if (read_at(fd, 0, first, 7) != 7 ||
+        !adts_header(first, 7, &flen, &hz))
+        return;
+
+    uint64_t pos = 0, frames = 0, base = UINT64_MAX;
+    size_t blen = 0;
+    while (pos + 7 <= file_size) {
+        if (pos < base || pos + 7 > base + blen) {
+            base = pos;
+            int got = read_at(fd, (off_t)pos, buf, sizeof(buf));
+            if (got < 7) break;
+            blen = (size_t)got;
+        }
+        const unsigned char *p = buf + (size_t)(pos - base);
+        size_t avail = blen - (size_t)(pos - base);
+        if (!adts_header(p, avail, &flen, &hz)) {
+            pos++;
+            continue;
+        }
+        pos += flen;
+        frames++;
+    }
+    if (frames && hz)
+        set_duration_ms(m, frames * 1024 * 1000 / (uint64_t)hz);
+}
+
+static void read_duration(int fd, const char *path, uint64_t file_size,
+                          TrackMeta *m)
+{
+    if (ext_is(path, ".wav"))
+        wav_duration(fd, file_size, m);
+    else if (ext_is(path, ".flac"))
+        flac_duration(fd, m);
+    else if (ext_is(path, ".ogg") || ext_is(path, ".oga"))
+        ogg_duration(fd, file_size, m);
+    else if (ext_is(path, ".m4a"))
+        m4a_duration(fd, file_size, m);
+    else if (ext_is(path, ".aac"))
+        adts_duration(fd, file_size, m);
+}
+
 int tags_read(const char *path, TrackMeta *m, TagEncoding enc)
 {
     meta_init(m);
+    if (!is_mp3_name(path)) {
+        int f = open(path, O_RDONLY);
+        if (f < 0) return -1;
+        struct stat st;
+        if (fstat(f, &st) == 0 && S_ISREG(st.st_mode) && st.st_size >= 4)
+            read_duration(f, path, (uint64_t)st.st_size, m);
+        close(f);
+        return 0;
+    }
     int fd = open(path, O_RDONLY);
     if (fd < 0) return -1;
     struct stat st;

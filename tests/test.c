@@ -87,6 +87,28 @@ static void write_file(const char *path, const char *text)
     fclose(f);
 }
 
+static void write_bytes(const char *path, const void *data, size_t n)
+{
+    FILE *f = fopen(path, "wb");
+    assert(f);
+    assert(fwrite(data, 1, n, f) == n);
+    fclose(f);
+}
+
+static void put_le16(unsigned char *p, uint16_t v)
+{
+    p[0] = (unsigned char)v;
+    p[1] = (unsigned char)(v >> 8);
+}
+
+static void put_le32(unsigned char *p, uint32_t v)
+{
+    p[0] = (unsigned char)v;
+    p[1] = (unsigned char)(v >> 8);
+    p[2] = (unsigned char)(v >> 16);
+    p[3] = (unsigned char)(v >> 24);
+}
+
 
 static void put_be32(unsigned char *p, uint32_t v)
 {
@@ -167,6 +189,117 @@ static void test_tags_file(void)
     rmdir(dir);
 }
 
+static void test_duration_files(void)
+{
+    char dir[] = "/tmp/tit-dur-XXXXXX";
+    assert(mkdtemp(dir));
+    char path[512];
+    TrackMeta m;
+
+    size_t wav_len = 12 + 8 + 16 + 8 + 88200;
+    unsigned char *wav = calloc(1, wav_len);
+    assert(wav);
+    memcpy(wav, "RIFF", 4);
+    put_le32(wav + 4, (uint32_t)(wav_len - 8));
+    memcpy(wav + 8, "WAVE", 4);
+    memcpy(wav + 12, "fmt ", 4);
+    put_le32(wav + 16, 16);
+    put_le16(wav + 20, 1);
+    put_le16(wav + 22, 1);
+    put_le32(wav + 24, 44100);
+    put_le32(wav + 28, 88200);
+    put_le16(wav + 32, 2);
+    put_le16(wav + 34, 16);
+    memcpy(wav + 36, "data", 4);
+    put_le32(wav + 40, 88200);
+    snprintf(path, sizeof(path), "%s/tone.wav", dir);
+    write_bytes(path, wav, wav_len);
+    free(wav);
+    assert(tags_read(path, &m, TAG_LATIN1) == 0);
+    assert(m.duration_ms == 1000);
+    meta_free(&m);
+
+    unsigned char flac[4 + 4 + 34];
+    memset(flac, 0, sizeof(flac));
+    memcpy(flac, "fLaC", 4);
+    flac[4] = 0x80;
+    flac[5] = 0;
+    flac[6] = 0;
+    flac[7] = 34;
+    uint32_t rate = 44100;
+    flac[8 + 10] = (unsigned char)((rate >> 12) & 0xff);
+    flac[8 + 11] = (unsigned char)((rate >> 4) & 0xff);
+    flac[8 + 12] = (unsigned char)(((rate & 0x0f) << 4) | (1 << 1));
+    uint64_t samples = 44100;
+    flac[8 + 13] = 0;
+    flac[8 + 14] = (unsigned char)(samples >> 24);
+    flac[8 + 15] = (unsigned char)(samples >> 16);
+    flac[8 + 16] = (unsigned char)(samples >> 8);
+    flac[8 + 17] = (unsigned char)samples;
+    snprintf(path, sizeof(path), "%s/tone.flac", dir);
+    write_bytes(path, flac, sizeof(flac));
+    assert(tags_read(path, &m, TAG_LATIN1) == 0);
+    assert(m.duration_ms == 1000);
+    meta_free(&m);
+
+    unsigned char m4a[36];
+    memset(m4a, 0, sizeof(m4a));
+    put_be32(m4a, 36);
+    memcpy(m4a + 4, "moov", 4);
+    put_be32(m4a + 8, 28);
+    memcpy(m4a + 12, "mvhd", 4);
+    put_be32(m4a + 28, 1000);
+    put_be32(m4a + 32, 2000);
+    snprintf(path, sizeof(path), "%s/tone.m4a", dir);
+    write_bytes(path, m4a, sizeof(m4a));
+    assert(tags_read(path, &m, TAG_LATIN1) == 0);
+    assert(m.duration_ms == 2000);
+    meta_free(&m);
+
+    unsigned char aac[14];
+    for (int i = 0; i < 2; i++) {
+        unsigned char *f = aac + i * 7;
+        f[0] = 0xff;
+        f[1] = 0xf1;
+        f[2] = 0x50;
+        f[3] = 0x80;
+        f[4] = 0x00;
+        f[5] = 0xe0;
+        f[6] = 0x00;
+    }
+    snprintf(path, sizeof(path), "%s/tone.aac", dir);
+    write_bytes(path, aac, sizeof(aac));
+    assert(tags_read(path, &m, TAG_LATIN1) == 0);
+    assert(m.duration_ms == 46);
+    meta_free(&m);
+
+    snprintf(path, sizeof(path), "%s/tone.wav", dir);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/tone.flac", dir);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/tone.m4a", dir);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/tone.aac", dir);
+    unlink(path);
+    rmdir(dir);
+}
+
+static void test_names(void)
+{
+    assert(is_audio_name("a.mp3"));
+    assert(is_audio_name("A.WAV"));
+    assert(is_audio_name("a.flac"));
+    assert(is_audio_name("a.ogg"));
+    assert(is_audio_name("a.oga"));
+    assert(is_audio_name("a.aac"));
+    assert(is_audio_name("a.m4a"));
+    assert(is_audio_name("A.M4A"));
+    assert(!is_audio_name("a.opus"));
+    assert(!is_audio_name("a.txt"));
+    assert(!is_audio_name("mp3"));
+    assert(is_playlist_name("x.m3u8"));
+}
+
 static void test_playlist(void)
 {
     char dir[] = "/tmp/tit-test-XXXXXX";
@@ -176,6 +309,8 @@ static void test_playlist(void)
     write_file(path, "");
     snprintf(path, sizeof(path), "%s/b.mp3", dir);
     write_file(path, "");
+    snprintf(path, sizeof(path), "%s/extra.flac", dir);
+    write_file(path, "");
     snprintf(path, sizeof(path), "%s/list.m3u8", dir);
     write_file(path,
                "\xef\xbb\xbf#EXTM3U\n"
@@ -183,12 +318,13 @@ static void test_playlist(void)
                "a.mp3\n"
                "#EXTINF:3,Missing\n"
                "missing.mp3\n"
-               "http://example.invalid/x.mp3\n");
+               "http://example.invalid/x.mp3\n"
+               "extra.flac\n");
 
     View v;
     view_init(&v);
     assert(view_load_playlist(&v, path, TAG_LATIN1) == 0);
-    assert(v.len == 3);
+    assert(v.len == 4);
     assert(v.items[0].type == ENT_FILE);
     assert(!v.items[0].missing);
     assert(v.items[0].meta.duration_ms == 2000);
@@ -197,12 +333,14 @@ static void test_playlist(void)
     assert(strcmp(v.items[1].meta.title, "Missing") == 0);
     assert(v.items[2].type == ENT_URL);
     assert(!view_entry_playable(&v.items[2]));
-    assert(view_count_tracks(&v) == 1);
+    assert(v.items[3].type == ENT_FILE);
+    assert(!v.items[3].missing);
+    assert(view_count_tracks(&v) == 2);
 
     view_sort(&v, SORT_TITLE, false);
     assert(view_find_path(&v, v.items[0].path) == 0);
     view_remove(&v, 0);
-    assert(v.len == 2);
+    assert(v.len == 3);
     view_free(&v);
 
     snprintf(path, sizeof(path), "%s/sub", dir);
@@ -217,7 +355,7 @@ static void test_playlist(void)
     assert(v.items[0].type == ENT_PARENT);
     assert(strcmp(v.items[0].name, "..") == 0);
     assert(v.items[1].type == ENT_DIR);
-    assert(view_count_tracks(&v) == 2);
+    assert(view_count_tracks(&v) == 3);
 
     snprintf(path, sizeof(path), "%s/pkg.pls", dir);
     assert(view_load_playlist(&v, path, TAG_LATIN1) == 0);
@@ -229,6 +367,8 @@ static void test_playlist(void)
     snprintf(path, sizeof(path), "%s/a.mp3", dir);
     unlink(path);
     snprintf(path, sizeof(path), "%s/b.mp3", dir);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/extra.flac", dir);
     unlink(path);
     snprintf(path, sizeof(path), "%s/list.m3u8", dir);
     unlink(path);
@@ -249,6 +389,8 @@ int main(void)
     test_text();
     test_utf8();
     test_tags_file();
+    test_duration_files();
+    test_names();
     test_playlist();
     puts("tests: ok");
     return 0;

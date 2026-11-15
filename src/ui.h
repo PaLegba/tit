@@ -32,10 +32,12 @@ typedef struct {
     uintattr_t error;
     uintattr_t border;
     bool frame;
+    bool ascii;
 } Ui;
 
 int ui_init(Ui *ui);
 void ui_shutdown(Ui *ui);
+void ui_busy(void *user, const char *msg);
 void ui_draw(App *a, Ui *ui);
 void ui_handle(App *a, Ui *ui, const struct tb_event *ev);
 

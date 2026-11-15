@@ -35,7 +35,6 @@ static int display_width(const char *s)
 static int print_clip(const Ui *ui, int x, int y, int maxw, uintattr_t fg,
                       uintattr_t bg, const char *s, bool ellipsis)
 {
-    (void)ui;
     int start = x;
     bool cut = false;
     while (*s && x - start < maxw) {
@@ -55,7 +54,7 @@ static int print_clip(const Ui *ui, int x, int y, int maxw, uintattr_t fg,
         if (!cw) x++;
     }
     if ((cut || *s) && ellipsis && x - start < maxw) {
-        tb_set_cell(x, y, 0x2026, fg, bg);
+        tb_set_cell(x, y, ui->ascii ? '~' : 0x2026, fg, bg);
         x++;
     }
     return x;
@@ -149,6 +148,33 @@ static int rgb_to_256(uint32_t rgb)
     return dc <= dg ? cube : 232 + gidx;
 }
 
+/* Map an RGB colour to the nearest ANSI 16-colour slot. */
+static int rgb_to_16(uint32_t rgb)
+{
+    static const uint32_t ansi[16] = {
+        0x000000, 0xCD0000, 0x00CD00, 0xCDCD00,
+        0x0000EE, 0xCD00CD, 0x00CDCD, 0xE5E5E5,
+        0x7F7F7F, 0xFF0000, 0x00FF00, 0xFFFF00,
+        0x5C5CFF, 0xFF00FF, 0x00FFFF, 0xFFFFFF
+    };
+    int r = (int)((rgb >> 16) & 0xff);
+    int g = (int)((rgb >> 8) & 0xff);
+    int b = (int)(rgb & 0xff);
+    int best = 0, best_distance = 0;
+    for (int i = 0; i < 16; i++) {
+        int ar = (int)((ansi[i] >> 16) & 0xff);
+        int ag = (int)((ansi[i] >> 8) & 0xff);
+        int ab = (int)(ansi[i] & 0xff);
+        int d = (r - ar) * (r - ar) + (g - ag) * (g - ag) +
+                (b - ab) * (b - ab);
+        if (i == 0 || d < best_distance) {
+            best = i;
+            best_distance = d;
+        }
+    }
+    return best;
+}
+
 static uintattr_t color_of(const Ui *ui, uint32_t rgb)
 {
     if (!ui->color) return TB_DEFAULT;
@@ -156,6 +182,11 @@ static uintattr_t color_of(const Ui *ui, uint32_t rgb)
         return rgb ? rgb : TB_HI_BLACK;
     if (ui->mode == TB_OUTPUT_256)
         return (uintattr_t)rgb_to_256(rgb);
+    if (ui->mode == TB_OUTPUT_NORMAL) {
+        int index = rgb_to_16(rgb);
+        if (index < 8) return (uintattr_t)(TB_BLACK + index);
+        return (uintattr_t)(TB_BLACK + index - 8) | TB_BRIGHT;
+    }
     return TB_DEFAULT;
 }
 
@@ -254,6 +285,21 @@ const char *ui_cycle_theme(Ui *ui)
     return themes[i].name;
 }
 
+void ui_busy(void *user, const char *msg)
+{
+    Ui *ui = user;
+    int w = tb_width(), h = tb_height();
+    tb_clear();
+    if (w > 0 && h > 0) {
+        int len = display_width(msg);
+        int x = (w - len) / 2;
+        if (x < 0) x = 0;
+        print_clip(ui, x, h / 2, w - x, ui->accent | TB_BOLD, ui->bg, msg,
+                   false);
+    }
+    tb_present();
+}
+
 static void draw_header(App *a, Ui *ui, int w)
 {
     uintattr_t bg = ui->bg;
@@ -286,8 +332,11 @@ static void draw_list(App *a, Ui *ui, int x0, int y0, int list_w, int list_h)
             ? a->view.len - (size_t)list_h : 0;
 
     for (int row = 0; row < list_h; row++) {
+        int y = y0 + row;
+        for (int x = x0; x < x0 + list_w; x++)
+            tb_set_cell(x, y, ' ', ui->fg, bg);
         size_t i = a->top + (size_t)row;
-        if (i >= a->view.len) break;
+        if (i >= a->view.len) continue;
         Entry *e = &a->view.items[i];
         bool sel = i == a->cursor;
         bool playing = (int)i == a->playing_row;
@@ -300,9 +349,8 @@ static void draw_list(App *a, Ui *ui, int x0, int y0, int list_w, int list_h)
         if (e->type == ENT_FILE && e->missing) fg = ui->error;
         if (sel) fg |= TB_REVERSE;
 
-        int y = y0 + row;
         if (playing)
-            tb_set_cell(x0, y, 0x25b6, fg, bg);
+            tb_set_cell(x0, y, ui->ascii ? '>' : 0x25b6, fg, bg);
         else if (sel)
             tb_set_cell(x0, y, '>', fg, bg);
         char label[2048];
@@ -330,7 +378,7 @@ static void draw_now(App *a, Ui *ui, int w, int y)
     uint32_t state = '.';
     uintattr_t state_fg = ui->dim;
     if (player_is_playing(a->player)) {
-        state = 0x25b6;
+        state = ui->ascii ? '>' : 0x25b6;
         state_fg = ui->playing | TB_BOLD;
     } else if (player_is_paused(a->player)) {
         state = '=';
@@ -395,8 +443,10 @@ static void draw_progress(App *a, Ui *ui, int w, int y)
     uintattr_t rest = ui->dim;
     if (player_is_paused(a->player)) fg = ui->dim;
     for (int i = 0; i < bar_w; i++) {
-        if (i < fill) tb_set_cell(bar_x + i, y, 0x2501, fg, bg);
-        else tb_set_cell(bar_x + i, y, 0x2500, rest, bg);
+        if (i < fill)
+            tb_set_cell(bar_x + i, y, ui->ascii ? '#' : 0x2501, fg, bg);
+        else
+            tb_set_cell(bar_x + i, y, ui->ascii ? '-' : 0x2500, rest, bg);
     }
 }
 
@@ -424,7 +474,8 @@ static void draw_help(Ui *ui, int w, int h)
 {
     uintattr_t bg = ui->bg;
     print_clip(ui, 1, 0, w - 2, ui->accent | TB_BOLD, bg,
-               "THE IRON TAPPER — keys", false);
+               ui->ascii ? "THE IRON TAPPER - keys"
+                         : "THE IRON TAPPER — keys", false);
     static const char *lines[] = {
         "j/k, Up/Down    move            Enter   play / enter dir / load playlist",
         "g/G, Home/End   top / bottom    Space   play / pause",
@@ -440,7 +491,7 @@ static void draw_help(Ui *ui, int w, int h)
         "R               reload directory / playlist",
         "q               quit",
         "",
-        "Filesystem is the playlist: directories show MP3s and subdirectories.",
+        "Filesystem is the playlist: directories show audio files and subdirectories.",
         "Deleting a track only removes it from the in-memory list.",
         "",
         "press any key",
@@ -459,6 +510,21 @@ static void draw_frame(Ui *ui, int w, int h)
     int x0 = 1, y0 = 1, x1 = w - 2, y1 = h - 4;
     uintattr_t fg = ui->border;
     uintattr_t bg = ui->bg;
+    if (ui->ascii) {
+        tb_set_cell(x0, y0, '+', fg, bg);
+        tb_set_cell(x1, y0, '+', fg, bg);
+        tb_set_cell(x0, y1, '+', fg, bg);
+        tb_set_cell(x1, y1, '+', fg, bg);
+        for (int x = x0 + 1; x < x1; x++) {
+            tb_set_cell(x, y0, '-', fg, bg);
+            tb_set_cell(x, y1, '-', fg, bg);
+        }
+        for (int y = y0 + 1; y < y1; y++) {
+            tb_set_cell(x0, y, '|', fg, bg);
+            tb_set_cell(x1, y, '|', fg, bg);
+        }
+        return;
+    }
     tb_set_cell(x0, y0, 0x256d, fg, bg);
     tb_set_cell(x1, y0, 0x256e, fg, bg);
     tb_set_cell(x0, y1, 0x2570, fg, bg);
@@ -642,6 +708,7 @@ int ui_init(Ui *ui)
     ui->color = getenv("NO_COLOR") == NULL;
 
     bool truecolor = false;
+    bool forced = false;
     const char *colorterm = getenv("COLORTERM");
     if (colorterm && (strstr(colorterm, "truecolor") ||
                       strstr(colorterm, "24bit")))
@@ -649,7 +716,18 @@ int ui_init(Ui *ui)
     const char *term = getenv("TERM");
     if (term && strstr(term, "direct")) truecolor = true;
     const char *override = getenv("TIT_TRUECOLOR");
-    if (override) truecolor = atoi(override) != 0;
+    if (override) {
+        truecolor = atoi(override) != 0;
+        forced = true;
+    }
+
+    /* vt220/wscons/Linux consoles read 38;5;N as SGR 5 (blink); use the
+       ANSI 16-colour range there. Same detection as nmed. */
+    bool console16 = term &&
+        (strstr(term, "vt100") || strstr(term, "vt220") ||
+         strstr(term, "vt320") || strstr(term, "wsvt25") ||
+         strstr(term, "cons25") || strstr(term, "linux") ||
+         strcmp(term, "ansi") == 0);
 
     if (!ui->color) {
         ui->mode = TB_OUTPUT_NORMAL;
@@ -657,12 +735,16 @@ int ui_init(Ui *ui)
     } else if (truecolor) {
         ui->mode = TB_OUTPUT_TRUECOLOR;
         tb_set_output_mode(TB_OUTPUT_TRUECOLOR);
+    } else if (console16 && !forced) {
+        ui->mode = TB_OUTPUT_NORMAL;
+        tb_set_output_mode(TB_OUTPUT_NORMAL);
     } else {
         ui->mode = TB_OUTPUT_256;
         tb_set_output_mode(TB_OUTPUT_256);
     }
     tb_hide_cursor();
     ui->frame = false;
+    ui->ascii = false;
     ui_set_theme(ui, &themes[0]);
     return 0;
 }
